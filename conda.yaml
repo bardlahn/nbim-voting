@@ -1,9 +1,0 @@
-name: nbimvr
-
-dependencies:
-  - python=3.10
-  - conda-forge::pip
-
-  - pip:
-    - httpx==0.23.0
-    - lru-dict==1.1.8
