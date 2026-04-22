@@ -6,13 +6,13 @@ from typing import List, Optional
 import httpx
 from httpx import Response, Request
 
-from model import Company, MeetingWithVotes
-from nbimvr import NBIMVR
+from .model import Company, MeetingWithVotes
+from .nbimvr import NBIMVR
 
 
 class NBIMVRClient(NBIMVR):
-    def __init__(self, api_key: str) -> None:
-        super().__init__(api_key)
+    def __init__(self) -> None:
+        super().__init__()
 
         self.client = httpx.Client(
             headers=self.headers,

@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from collections import OrderedDict
+from pathlib import Path
 
-from model import Company, MeetingWithVotes
+from .model import Company, MeetingWithVotes
 
 class LRUDict(OrderedDict):
     def __init__(self, maxsize=128):
@@ -30,7 +31,8 @@ class NBIMVR(ABC):
 
         # Reading secrets from file to set API key
         secrets = {}
-        with open("secrets.txt", "r") as f:
+        secrets_path = Path(__file__).parent / "secrets.txt"
+        with open(secrets_path, "r") as f:
             for line in f:
                 line = line.strip()
                 if line and "=" in line:
