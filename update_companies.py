@@ -1,9 +1,8 @@
 """
 
-update_companies.py
-────────────────────
+** update_companies.py **
 
-Fetches all company records from the NBIM Voting Records API via the NBIMVRClient and upserts them into the `companies` table in the `nbim_data` MySQL database.
+Fetches all company records from the NBIM Voting Records API via the NBIMVRClient and inserts/updates them into the `companies` table in the `nbim_data` MySQL database.
 
 Operations are logged to update_companies.log.
 
