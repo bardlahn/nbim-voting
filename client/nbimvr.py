@@ -25,8 +25,18 @@ class LRUDict(OrderedDict):
 class NBIMVR(ABC):
     base_url: str = "https://vd.a.nbim.no/v1"
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self) -> None:
         super().__init__()
+
+        # Reading secrets from file to set API key
+        secrets = {}
+        with open("secrets.txt", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line:
+                    key, value = line.split("=", 1)
+                    secrets[key.strip()] = value.strip()
+        api_key = secrets["NBIM_API_KEY"]
 
         self.headers: Dict[str, str] = {"x-api-key": api_key}
         self.request_timer_dict = LRUDict(128)
