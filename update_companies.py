@@ -2,6 +2,7 @@
 
 update_companies.py
 ────────────────────
+
 Fetches all company records from the NBIM Voting Records API via the NBIMVRClient and upserts them into the `companies` table in the `nbim_data` MySQL database.
 
 Operations are logged to update_companies.log.
@@ -10,8 +11,14 @@ Reads database credentials from client/secrets.txt:
     DB_USER=<username>
     DB_SECRET=<password>
 
+Optional argument: a single letter, e.g.:
+    python update_companies.py M
+    Only companies whose name starts with that letter are processed.
+    If omitted, all companies are fetched.
+
 """
 
+import argparse
 import logging
 import sys
 from datetime import datetime
@@ -22,7 +29,7 @@ from mysql.connector import Error as MySQLError
 from client.nbimvr_client import NBIMVRClient
 
 
-# Logging — writes to both console and log file
+# Setting up logging
 
 log = logging.getLogger("update_companies")
 log.setLevel(logging.DEBUG)
@@ -51,7 +58,7 @@ def load_secrets(path: str = "client/secrets.txt") -> dict:
     return secrets
 
 
-# Database commands
+# Setting up database commands
 
 DDL = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -104,10 +111,35 @@ def upsert_company(conn, row: dict) -> None:
     cur.close()
 
 
+# Argument parsing
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Populate/update the companies table from the NBIM API.")
+    p.add_argument(
+        "from_letter",
+        nargs="?",
+        default=None,
+        metavar="LETTER",
+        help="Optional single letter: fetch companies whose name starts with this letter or later, alphabetically (case-insensitive).",
+    )
+    args = p.parse_args()
+    if args.from_letter is not None:
+        if len(args.from_letter) != 1 or not args.from_letter.isalpha():
+            p.error("Argument must be a single letter, e.g.: python update_companies.py M")
+    return args
+
+
 # Main functionality
 
 def run() -> None:
-    log.info("=== update_companies.py initiated at %s ===", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    args = parse_args()
+    from_letter = args.from_letter.upper() if args.from_letter else None
+
+    start_msg = "=== update_companies.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if from_letter:
+        start_msg += " (fetching from letter '%s')" % from_letter
+    start_msg += " ==="
+    log.info(start_msg)
 
     # Load credentials
     try:
@@ -147,6 +179,17 @@ def run() -> None:
         log.error("Failed to fetch company names from API: %s — aborting.", exc)
         conn.close()
         sys.exit(1)
+
+    # Filter by starting letter if argument was provided
+    if from_letter:
+        company_names = [n for n in company_names if n.upper() >= from_letter]
+        log.info("%d company/companies to process (from letter '%s').", len(company_names), from_letter)
+
+
+    # Filter by letter if provided
+    if from_letter:
+        company_names = [n for n in company_names if n.upper().startswith(from_letter)]
+        log.info("Filtered to %d company name(s) starting with '%s'.", len(company_names), from_letter)
 
     # Process each company
     success_count = 0
