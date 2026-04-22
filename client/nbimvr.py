@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
-from lru import LRU
+from cachetools import LRUCache
 
 from model import Company, MeetingWithVotes
 
@@ -13,7 +13,7 @@ class NBIMVR(ABC):
         super().__init__()
 
         self.headers: Dict[str, str] = {"x-api-key": api_key}
-        self.request_timer_dict = LRU(128)
+        self.request_timer_dict = LRUCache(maxsize=128)
 
     @abstractmethod
     def get_tickers(self) -> List[str]:
