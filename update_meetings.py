@@ -15,7 +15,11 @@ Reads database credentials from client/secrets.txt:
     DB_SECRET=<password>
 
 Optional arguments:
-    --limit N       Stop after fetching N meetings.
+    --limit N               Stop after fetching N meetings.
+    --log OFF|STRICT|FULL   File logging level (default: FULL).
+                            OFF    = no logging to file.
+                            STRICT = only start, end, and error messages.
+                            FULL   = all messages (default).
 
 """
 
@@ -37,13 +41,34 @@ log = logging.getLogger("update_meetings")
 log.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-file_handler = logging.FileHandler("update_meetings.log", encoding="utf-8")
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
-
+# Console handler — always active, always full
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(formatter)
 log.addHandler(console_handler)
+
+# File handler — configured after args are parsed (see configure_file_logging)
+file_handler = logging.FileHandler("update_meetings.log", encoding="utf-8")
+file_handler.setFormatter(formatter)
+
+
+def configure_file_logging(level: str) -> None:
+    """Attach and configure the file handler based on --log argument."""
+    if level == "OFF":
+        return  # Do not attach file handler at all
+    if level == "STRICT":
+        file_handler.setLevel(logging.ERROR)
+    else:  # FULL
+        file_handler.setLevel(logging.DEBUG)
+    log.addHandler(file_handler)
+
+
+def log_important(msg: str) -> None:
+    """Log a message at INFO to console, and always write to file regardless of STRICT level."""
+    log.info(msg)
+    # In STRICT mode the file handler filters out INFO, so write directly
+    if file_handler in log.handlers and file_handler.level > logging.INFO:
+        record = log.makeRecord(log.name, logging.INFO, "", 0, msg, (), None)
+        file_handler.emit(record)
 
 
 # Fetching secrets
@@ -213,6 +238,12 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Stop after fetching N meetings.",
     )
+    p.add_argument(
+        "--log",
+        choices=["OFF", "STRICT", "FULL"],
+        default="FULL",
+        help="File logging level: OFF, STRICT (errors only), or FULL (default).",
+    )
     args = p.parse_args()
     if args.limit is not None and args.limit < 1:
         p.error("--limit must be a positive integer.")
@@ -223,12 +254,15 @@ def parse_args() -> argparse.Namespace:
 
 def run() -> None:
     args = parse_args()
+    configure_file_logging(args.log)
 
     start_msg = "=== update_meetings.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if args.limit:
         start_msg += " --limit %d" % args.limit
+    if args.log != "FULL":
+        start_msg += " --log %s" % args.log
     start_msg += " ==="
-    log.info(start_msg)
+    log_important(start_msg)
 
     # Load credentials
     try:
@@ -269,15 +303,11 @@ def run() -> None:
         conn.close()
         sys.exit(1)
 
-    # Apply limit if provided
-    if args.limit:
-        meeting_ids = meeting_ids[:args.limit]
-        log.info("Limiting to %d meeting(s).", len(meeting_ids))
-
     # Process each meeting
     success_count = 0
     skipped_count = 0
     error_count = 0
+    fetch_count = 0
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     for meeting_id in meeting_ids:
@@ -292,9 +322,15 @@ def run() -> None:
             error_count += 1
             continue
 
+        # Stop if API fetch limit has been reached
+        if args.limit and fetch_count >= args.limit:
+            log.info("API fetch limit of %d reached — stopping.", args.limit)
+            break
+
         # Fetch meeting from API
         try:
             meeting = client.get_meeting(meeting_id)
+            fetch_count += 1
         except Exception as exc:
             log.error("ERROR fetching meeting id=%s from API: %s", meeting_id, exc)
             error_count += 1
@@ -326,11 +362,10 @@ def run() -> None:
             error_count += 1
 
     conn.close()
-    log.info(
-        "=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===",
-        success_count,
-        skipped_count,
-        error_count,
+    log_important(
+        "=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===" % (
+            success_count, skipped_count, error_count
+        )
     )
 
 

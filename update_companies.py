@@ -11,14 +11,23 @@ Reads database credentials from client/secrets.txt:
     DB_SECRET=<password>
 
 Optional arguments:
-    --letter A      Only process companies whose name starts with this letter (case-insensitive).
-    --add           Only add companies that do not already exist in the database.
-    --limit N       Stop after fetching N companies.
+    --letter A          Only process companies whose name starts with this letter (case-insensitive).
+    --add               Only add companies not already present in the database; skip existing ones.
+    --limit N           Stop after N API requests. Skipped companies (--add) do not count towards limit.
+    --staged NAME       Staged run using batch NAME. On first run, writes company names to NAME.tmp
+                        and processes from that list. On subsequent runs, continues from the remaining
+                        unprocessed names in NAME.tmp. Deletes NAME.tmp when all names are processed.
+    --log OFF|STRICT|FULL
+                        File logging level (default: FULL).
+                        OFF    = no logging to file.
+                        STRICT = only start, end, and error messages.
+                        FULL   = all messages (default).
 
 """
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 
@@ -28,22 +37,46 @@ from mysql.connector import Error as MySQLError
 from client.nbimvr_client import NBIMVRClient
 
 
-# Setting up logging
+# ──────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────
 
 log = logging.getLogger("update_companies")
 log.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-file_handler = logging.FileHandler("update_companies.log", encoding="utf-8")
-file_handler.setFormatter(formatter)
-log.addHandler(file_handler)
-
+# Console handler — always active, always full
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(formatter)
 log.addHandler(console_handler)
 
+# File handler — attached and configured after args are parsed
+file_handler = logging.FileHandler("update_companies.log", encoding="utf-8")
+file_handler.setFormatter(formatter)
 
-# Fetching secrets
+
+def configure_file_logging(level: str) -> None:
+    """Attach and configure the file handler based on --log argument."""
+    if level == "OFF":
+        return
+    if level == "STRICT":
+        file_handler.setLevel(logging.ERROR)
+    else:  # FULL
+        file_handler.setLevel(logging.DEBUG)
+    log.addHandler(file_handler)
+
+
+def log_important(msg: str) -> None:
+    """Log a message at INFO to console, and always write to file regardless of STRICT level."""
+    log.info(msg)
+    if file_handler in log.handlers and file_handler.level > logging.INFO:
+        record = log.makeRecord(log.name, logging.INFO, "", 0, msg, (), None)
+        file_handler.emit(record)
+
+
+# ──────────────────────────────────────────────
+# Secrets
+# ──────────────────────────────────────────────
 
 def load_secrets(path: str = "client/secrets.txt") -> dict:
     secrets = {}
@@ -57,7 +90,9 @@ def load_secrets(path: str = "client/secrets.txt") -> dict:
     return secrets
 
 
-# Setting up database commands
+# ──────────────────────────────────────────────
+# Database
+# ──────────────────────────────────────────────
 
 DDL = """
 CREATE TABLE IF NOT EXISTS companies (
@@ -120,7 +155,33 @@ def upsert_company(conn, row: dict) -> None:
     cur.close()
 
 
+# ──────────────────────────────────────────────
+# Staged run helpers
+# ──────────────────────────────────────────────
+
+def staged_file_path(name: str) -> str:
+    return "%s.tmp" % name
+
+
+def read_staged_file(path: str) -> list[str]:
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.rstrip("\n") for line in f if line.strip()]
+
+
+def write_staged_file(path: str, names: list[str]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for name in names:
+            f.write(name + "\n")
+
+
+def mark_staged_complete(path: str, completed_name: str, remaining: list[str]) -> None:
+    """Remove completed_name from the staged file by rewriting remaining names."""
+    write_staged_file(path, remaining)
+
+
+# ──────────────────────────────────────────────
 # Argument parsing
+# ──────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Populate/update the companies table from the NBIM API.")
@@ -140,7 +201,19 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         metavar="N",
-        help="Stop after fetching N companies.",
+        help="Stop after N API requests (skipped companies do not count).",
+    )
+    p.add_argument(
+        "--staged",
+        default=None,
+        metavar="NAME",
+        help="Staged run: persist progress to NAME.tmp and continue across runs.",
+    )
+    p.add_argument(
+        "--log",
+        choices=["OFF", "STRICT", "FULL"],
+        default="FULL",
+        help="File logging level: OFF, STRICT (errors only), or FULL (default).",
     )
     args = p.parse_args()
     if args.letter is not None:
@@ -148,13 +221,18 @@ def parse_args() -> argparse.Namespace:
             p.error("--letter must be a single letter, e.g.: python update_companies.py --letter M")
     if args.limit is not None and args.limit < 1:
         p.error("--limit must be a positive integer.")
+    if args.staged is not None and not args.staged.isalnum():
+        p.error("--staged NAME must be alphanumeric.")
     return args
 
 
+# ──────────────────────────────────────────────
 # Main functionality
+# ──────────────────────────────────────────────
 
 def run() -> None:
     args = parse_args()
+    configure_file_logging(args.log)
     letter = args.letter.upper() if args.letter else None
 
     start_msg = "=== update_companies.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -164,8 +242,12 @@ def run() -> None:
         start_msg += " --add"
     if args.limit:
         start_msg += " --limit %d" % args.limit
+    if args.staged:
+        start_msg += " --staged %s" % args.staged
+    if args.log != "FULL":
+        start_msg += " --log %s" % args.log
     start_msg += " ==="
-    log.info(start_msg)
+    log_important(start_msg)
 
     # Load credentials
     try:
@@ -197,55 +279,85 @@ def run() -> None:
         conn.close()
         sys.exit(1)
 
-    # Fetch all company names
-    try:
-        company_names = client.get_company_names()
-        log.info("Retrieved %d company name(s) from API.", len(company_names))
-    except Exception as exc:
-        log.error("Failed to fetch company names from API: %s — aborting.", exc)
-        conn.close()
-        sys.exit(1)
+    # Determine company names list — from staged file or fresh API call
+    staged_path = staged_file_path(args.staged) if args.staged else None
 
-    # Filter by letter if provided
-    if letter:
-        company_names = [n for n in company_names if n.upper().startswith(letter)]
-        log.info("Filtered to %d company name(s) starting with '%s'.", len(company_names), letter)
+    if staged_path and os.path.exists(staged_path):
+        company_names = read_staged_file(staged_path)
+        log.info("Staged run '%s': resuming with %d remaining name(s) from %s.",
+                 args.staged, len(company_names), staged_path)
+    else:
+        try:
+            company_names = client.get_company_names()
+            log.info("Retrieved %d company name(s) from API.", len(company_names))
+        except Exception as exc:
+            log.error("Failed to fetch company names from API: %s — aborting.", exc)
+            conn.close()
+            sys.exit(1)
 
-    # Apply limit if provided
-    if args.limit:
-        company_names = company_names[:args.limit]
-        log.info("Limiting to %d company name(s).", len(company_names))
+        # Filter by letter if provided
+        if letter:
+            company_names = [n for n in company_names if n.upper().startswith(letter)]
+            log.info("Filtered to %d company name(s) starting with '%s'.", len(company_names), letter)
+
+        # Write staged file if --staged is set
+        if staged_path:
+            write_staged_file(staged_path, company_names)
+            log.info("Staged run '%s': wrote %d name(s) to %s.",
+                     args.staged, len(company_names), staged_path)
 
     # Process each company
     success_count = 0
     error_count = 0
     skipped_count = 0
+    fetch_count = 0
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Work on a copy so we can track remaining names for the staged file
+    remaining_names = list(company_names)
+
     for name in company_names:
-        # Skip existing companies if --add is set
+        # Skip existing companies if --add is set (does not count towards limit)
         if args.add:
             try:
                 if company_exists(conn, name):
                     log.debug("SKIP '%s' — already exists in database.", name)
                     skipped_count += 1
+                    remaining_names.remove(name)
+                    if staged_path:
+                        write_staged_file(staged_path, remaining_names)
                     continue
             except MySQLError as exc:
                 log.error("ERROR checking existence of '%s' in database: %s", name, exc)
                 error_count += 1
+                remaining_names.remove(name)
+                if staged_path:
+                    write_staged_file(staged_path, remaining_names)
                 continue
+
+        # Stop if API fetch limit has been reached
+        if args.limit and fetch_count >= args.limit:
+            log.info("API fetch limit of %d reached — stopping.", args.limit)
+            break
 
         # Fetch full company record(s) by name
         try:
             companies = client.query_company_with_name(name)
+            fetch_count += 1
         except Exception as exc:
             log.error("ERROR fetching company '%s' from API: %s", name, exc)
             error_count += 1
+            remaining_names.remove(name)
+            if staged_path:
+                write_staged_file(staged_path, remaining_names)
             continue
 
         if not companies:
             log.error("ERROR no records returned for company name '%s'.", name)
             error_count += 1
+            remaining_names.remove(name)
+            if staged_path:
+                write_staged_file(staged_path, remaining_names)
             continue
 
         for company in companies:
@@ -313,12 +425,21 @@ def run() -> None:
                 )
                 error_count += 1
 
+        # Mark name as completed in staged file
+        remaining_names.remove(name)
+        if staged_path:
+            write_staged_file(staged_path, remaining_names)
+
+    # Clean up staged file if all names have been processed
+    if staged_path and os.path.exists(staged_path) and not remaining_names:
+        os.remove(staged_path)
+        log.info("Staged run '%s': all names processed, %s deleted.", args.staged, staged_path)
+
     conn.close()
-    log.info(
-        "=== Finished. %d updated, %d skipped, %d error(s). ===",
-        success_count,
-        skipped_count,
-        error_count,
+    log_important(
+        "=== Finished. %d updated, %d skipped, %d error(s). ===" % (
+            success_count, skipped_count, error_count
+        )
     )
 
 
