@@ -27,7 +27,7 @@ from datetime import datetime
 from mysql.connector import Error as MySQLError
 
 from client.nbimvr_client import NBIMVRClient
-from nbim_db_functions import connect_db, ensure_table, meeting_exists, insert_meeting
+from nbim_functions_db import connect_db, ensure_table, meeting_exists, insert_meeting
 
 
 # ──────────────────────────────────────────────
