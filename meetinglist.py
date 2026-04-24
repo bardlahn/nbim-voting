@@ -116,6 +116,10 @@ def run() -> None:
     if len(analysis_ids) >= 2:
         intervals = [analysis_ids[i + 1] - analysis_ids[i] for i in range(len(analysis_ids) - 1)]
         avg_interval = sum(intervals) / len(intervals)
+        sorted_intervals = sorted(intervals)
+        mid = len(sorted_intervals) // 2
+        median_interval = (sorted_intervals[mid] if len(sorted_intervals) % 2 != 0
+                           else (sorted_intervals[mid - 1] + sorted_intervals[mid]) / 2)
         max_interval = max(intervals)
         max_interval_idx = intervals.index(max_interval)
         max_interval_from = analysis_ids[max_interval_idx]
@@ -123,6 +127,7 @@ def run() -> None:
 
         print("Interval analysis based on last %d IDs (from ID %d onwards)." % (len(analysis_ids), analysis_ids[0]))
         print("Average interval between consecutive meeting IDs: %.2f" % avg_interval)
+        print("Median interval between consecutive meeting IDs:  %.2f" % median_interval)
         print("Longest interval: %d (between ID %d and %d)" % (max_interval, max_interval_from, max_interval_to))
     else:
         print("Not enough meeting IDs for interval analysis.")
