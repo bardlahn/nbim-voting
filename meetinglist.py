@@ -111,6 +111,20 @@ def run() -> None:
 
     print("Written to %s." % output_path)
 
+    # Interval analysis
+    if len(sorted_ids) >= 2:
+        intervals = [sorted_ids[i + 1] - sorted_ids[i] for i in range(len(sorted_ids) - 1)]
+        avg_interval = sum(intervals) / len(intervals)
+        max_interval = max(intervals)
+        max_interval_idx = intervals.index(max_interval)
+        max_interval_from = sorted_ids[max_interval_idx]
+        max_interval_to = sorted_ids[max_interval_idx + 1]
+
+        print("Average interval between consecutive meeting IDs: %.2f" % avg_interval)
+        print("Longest interval: %d (between ID %d and %d)" % (max_interval, max_interval_from, max_interval_to))
+    else:
+        print("Not enough meeting IDs for interval analysis.")
+
 
 if __name__ == "__main__":
     run()
