@@ -10,10 +10,6 @@ Only adds meetings that do not already exist in the database.
 
 Operations are logged to update_meetings.log.
 
-Reads database credentials from client/secrets.txt:
-    DB_USER=<username>
-    DB_SECRET=<password>
-
 Optional arguments:
     --limit N               Stop after fetching N meetings.
     --log OFF|STRICT|FULL   File logging level (default: FULL).
@@ -24,68 +20,52 @@ Optional arguments:
 """
 
 import argparse
-import json
 import logging
 import sys
 from datetime import datetime
 
-import mysql.connector
 from mysql.connector import Error as MySQLError
 
 from client.nbimvr_client import NBIMVRClient
+from nbim_db_functions import connect_db, ensure_table, meeting_exists, insert_meeting
 
 
-# Setting up logging
+# ──────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────
 
 log = logging.getLogger("update_meetings")
 log.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-# Console handler — always active, always full
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(formatter)
 log.addHandler(console_handler)
 
-# File handler — configured after args are parsed (see configure_file_logging)
 file_handler = logging.FileHandler("update_meetings.log", encoding="utf-8")
 file_handler.setFormatter(formatter)
 
 
 def configure_file_logging(level: str) -> None:
-    """Attach and configure the file handler based on --log argument."""
     if level == "OFF":
-        return  # Do not attach file handler at all
+        return
     if level == "STRICT":
         file_handler.setLevel(logging.ERROR)
-    else:  # FULL
+    else:
         file_handler.setLevel(logging.DEBUG)
     log.addHandler(file_handler)
 
 
 def log_important(msg: str) -> None:
-    """Log a message at INFO to console, and always write to file regardless of STRICT level."""
     log.info(msg)
-    # In STRICT mode the file handler filters out INFO, so write directly
     if file_handler in log.handlers and file_handler.level > logging.INFO:
         record = log.makeRecord(log.name, logging.INFO, "", 0, msg, (), None)
         file_handler.emit(record)
 
 
-# Fetching secrets
-
-def load_secrets(path: str = "client/secrets.txt") -> dict:
-    secrets = {}
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            secrets[key.strip()] = value.strip()
-    return secrets
-
-
-# Setting up database commands
+# ──────────────────────────────────────────────
+# DDL
+# ──────────────────────────────────────────────
 
 DDL_MEETINGS = """
 CREATE TABLE IF NOT EXISTS meetings (
@@ -120,55 +100,17 @@ CREATE TABLE IF NOT EXISTS votes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
-INSERT_MEETING_SQL = """
-INSERT INTO meetings (id, type, date, company_id, company_name, company_ticker, isin, updated)
-VALUES (%(id)s, %(type)s, %(date)s, %(company_id)s, %(company_name)s, %(company_ticker)s, %(isin)s, %(updated)s);
-"""
 
-INSERT_VOTE_SQL = """
-INSERT INTO votes
-    (item_on_agenda_id, meeting_id, proposal_number, proposal_sequence,
-     proposal_text, proponent, management_rec, vote_instruction, voter_rationale)
-VALUES
-    (%(item_on_agenda_id)s, %(meeting_id)s, %(proposal_number)s, %(proposal_sequence)s,
-     %(proposal_text)s, %(proponent)s, %(management_rec)s, %(vote_instruction)s, %(voter_rationale)s);
-"""
+# ──────────────────────────────────────────────
+# Database helpers local to this script
+# ──────────────────────────────────────────────
 
-MEETING_EXISTS_SQL  = "SELECT 1 FROM meetings WHERE id = %(id)s LIMIT 1;"
-GET_ALL_MEETINGS_SQL = "SELECT meetings FROM companies WHERE meetings IS NOT NULL AND meetings != '';"
-
-
-def get_connection(user: str, password: str):
-    return mysql.connector.connect(
-        host="localhost",
-        port=3306,
-        database="nbim_data",
-        user=user,
-        password=password,
-        charset="utf8mb4",
-        autocommit=False,
-    )
-
-
-def ensure_tables(conn) -> None:
-    cur = conn.cursor()
-    cur.execute(DDL_MEETINGS)
-    cur.execute(DDL_VOTES)
-    conn.commit()
-    cur.close()
-
-
-def meeting_exists(conn, meeting_id: int) -> bool:
-    cur = conn.cursor()
-    cur.execute(MEETING_EXISTS_SQL, {"id": meeting_id})
-    result = cur.fetchone()
-    cur.close()
-    return result is not None
+_GET_ALL_MEETINGS_SQL = "SELECT meetings FROM companies WHERE meetings IS NOT NULL AND meetings != '';"
 
 
 def get_all_meeting_ids(conn) -> list[int]:
     cur = conn.cursor()
-    cur.execute(GET_ALL_MEETINGS_SQL)
+    cur.execute(_GET_ALL_MEETINGS_SQL)
     rows = cur.fetchall()
     cur.close()
     meeting_ids = []
@@ -177,7 +119,6 @@ def get_all_meeting_ids(conn) -> list[int]:
             mid = mid.strip()
             if mid.isdigit():
                 meeting_ids.append(int(mid))
-    # Deduplicate while preserving order
     seen = set()
     unique_ids = []
     for mid in meeting_ids:
@@ -187,70 +128,25 @@ def get_all_meeting_ids(conn) -> list[int]:
     return unique_ids
 
 
-def insert_meeting(conn, meeting, now: str) -> None:
-    cur = conn.cursor()
-
-    # Parse date — strip time component if present
-    date_str = meeting.date
-    if date_str and " " in date_str:
-        date_str = date_str.split(" ")[0]
-
-    meeting_row = {
-        "id":             meeting.id,
-        "type":           meeting.type,
-        "date":           date_str,
-        "company_id":     meeting.company_id,
-        "company_name":   meeting.company_name,
-        "company_ticker": meeting.company_ticker,
-        "isin":           meeting.isin,
-        "updated":        now,
-    }
-    cur.execute(INSERT_MEETING_SQL, meeting_row)
-
-    # Insert all votes for this meeting
-    for vote in (meeting.votes or []):
-        rationale = vote.voter_rationale
-        vote_row = {
-            "item_on_agenda_id": vote.item_on_agenda_id,
-            "meeting_id":        meeting.id,
-            "proposal_number":   vote.proposal_number,
-            "proposal_sequence": vote.proposal_sequence,
-            "proposal_text":     vote.proposal_text,
-            "proponent":         vote.proponent,
-            "management_rec":    vote.management_rec,
-            "vote_instruction":  vote.vote_instruction,
-            "voter_rationale":   json.dumps(rationale) if rationale is not None else None,
-        }
-        cur.execute(INSERT_VOTE_SQL, vote_row)
-
-    conn.commit()
-    cur.close()
-
-
+# ──────────────────────────────────────────────
 # Argument parsing
+# ──────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Populate the meetings and votes tables from the NBIM API.")
-    p.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Stop after fetching N meetings.",
-    )
-    p.add_argument(
-        "--log",
-        choices=["OFF", "STRICT", "FULL"],
-        default="FULL",
-        help="File logging level: OFF, STRICT (errors only), or FULL (default).",
-    )
+    p.add_argument("--limit", type=int, default=None, metavar="N",
+                   help="Stop after fetching N meetings.")
+    p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="FULL",
+                   help="File logging level: OFF, STRICT (errors only), or FULL (default).")
     args = p.parse_args()
     if args.limit is not None and args.limit < 1:
         p.error("--limit must be a positive integer.")
     return args
 
 
-# Main functionality
+# ──────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────
 
 def run() -> None:
     args = parse_args()
@@ -264,24 +160,13 @@ def run() -> None:
     start_msg += " ==="
     log_important(start_msg)
 
-    # Load credentials
-    try:
-        secrets = load_secrets("client/secrets.txt")
-        db_user = secrets["DB_USER"]
-        db_password = secrets["DB_SECRET"]
-    except FileNotFoundError:
-        log.error("Could not find client/secrets.txt — aborting.")
-        sys.exit(1)
-    except KeyError as exc:
-        log.error("Missing key in client/secrets.txt: %s — aborting.", exc)
-        sys.exit(1)
-
     # Connect to database
     try:
-        conn = get_connection(db_user, db_password)
-        ensure_tables(conn)
+        conn = connect_db()
+        ensure_table(conn, DDL_MEETINGS)
+        ensure_table(conn, DDL_VOTES)
         log.info("Connected to database `nbim_data`.")
-    except MySQLError as exc:
+    except (MySQLError, KeyError, FileNotFoundError) as exc:
         log.error("Could not connect to database: %s — aborting.", exc)
         sys.exit(1)
 
@@ -345,28 +230,17 @@ def run() -> None:
         try:
             vote_count = len(meeting.votes) if meeting.votes else 0
             insert_meeting(conn, meeting, now)
-            log.info(
-                "OK  meeting id=%-10s  %s  %s  (%d vote(s))",
-                meeting.id,
-                meeting.company_name,
-                meeting.date,
-                vote_count,
-            )
+            log.info("OK  meeting id=%-10s  %s  %s  (%d vote(s))",
+                     meeting.id, meeting.company_name, meeting.date, vote_count)
             success_count += 1
         except MySQLError as exc:
-            log.error(
-                "ERROR could not write meeting id=%s to database: %s",
-                meeting_id, exc,
-            )
+            log.error("ERROR could not write meeting id=%s to database: %s", meeting_id, exc)
             conn.rollback()
             error_count += 1
 
     conn.close()
-    log_important(
-        "=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===" % (
-            success_count, skipped_count, error_count
-        )
-    )
+    log_important("=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===" % (
+        success_count, skipped_count, error_count))
 
 
 if __name__ == "__main__":
