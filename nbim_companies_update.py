@@ -6,10 +6,6 @@ Fetches all company records from the NBIM Voting Records API via the NBIMVRClien
 
 Operations are logged to nbim_companies_update.log.
 
-Reads database credentials from client/secrets.txt:
-    DB_USER=<username>
-    DB_SECRET=<password>
-
 Optional arguments:
     --letter A          Only process companies whose name starts with this letter (case-insensitive).
     --add               Only add companies not already present in the database; skip existing ones.

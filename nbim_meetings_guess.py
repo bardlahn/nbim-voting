@@ -15,10 +15,6 @@ new meeting ID appended to its `meetings` field.
 
 Operations are logged to nbim_meetings_guess.log.
 
-Reads database credentials from client/secrets.txt:
-    DB_USER=<username>
-    DB_SECRET=<password>
-
 Optional arguments:
     --limit N               Number of ID guesses to attempt (default: 10).
     --direction UP|DOWN     Direction to guess from the boundary ID (default: UP).

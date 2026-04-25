@@ -4,6 +4,10 @@
 
 Shared database helper functions for the NBIM data harvesting scripts.
 
+Reads database credentials from client/secrets.txt:
+    DB_USER=<username>
+    DB_SECRET=<password>
+
 Provides:
     - connect_db()                  Read secrets and return a database connection
     - ensure_table(conn, ddl)       Create a table if it does not exist

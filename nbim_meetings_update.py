@@ -10,10 +10,6 @@ Only adds meetings that do not already exist in the database.
 
 Operations are logged to nbim_meetings_update.log.
 
-Reads database credentials from client/secrets.txt:
-    DB_USER=<username>
-    DB_SECRET=<password>
-
 Optional arguments:
     --limit N               Stop after fetching N meetings.
     --log OFF|STRICT|FULL   File logging level (default: STRICT).
