@@ -4,18 +4,14 @@
 
 Shared database helper functions for the NBIM data harvesting scripts.
 
-Database name, hostname and port is hardcoded. 
-Database credentials are read from file client/secrets.txt:
-    DB_USER=<username>
-    DB_SECRET=<password>
-    
 Provides:
-    - connect_db()              Read secrets and return a database connection
-    - ensure_table(conn, ddl)   Create a table if it does not exist
+    - connect_db()                  Read secrets and return a database connection
+    - ensure_table(conn, ddl)       Create a table if it does not exist
     - company_exists(conn, name)
     - upsert_company(conn, row)
     - meeting_exists(conn, meeting_id)
     - insert_meeting(conn, meeting, now)
+    - get_all_meeting_ids(conn)
 
 """
 
@@ -137,6 +133,30 @@ def meeting_exists(conn, meeting_id: int) -> bool:
     result = cur.fetchone()
     cur.close()
     return result is not None
+
+
+_GET_ALL_MEETINGS_SQL = "SELECT meetings FROM companies WHERE meetings IS NOT NULL AND meetings != '';"
+
+
+def get_all_meeting_ids(conn) -> list[int]:
+    """Return a deduplicated list of all meeting IDs found in the companies table."""
+    cur = conn.cursor()
+    cur.execute(_GET_ALL_MEETINGS_SQL)
+    rows = cur.fetchall()
+    cur.close()
+    meeting_ids = []
+    for (meetings_str,) in rows:
+        for mid in meetings_str.split(","):
+            mid = mid.strip()
+            if mid.isdigit():
+                meeting_ids.append(int(mid))
+    seen = set()
+    unique_ids = []
+    for mid in meeting_ids:
+        if mid not in seen:
+            seen.add(mid)
+            unique_ids.append(mid)
+    return unique_ids
 
 
 def insert_meeting(conn, meeting, now: str) -> None:

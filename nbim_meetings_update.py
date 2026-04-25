@@ -1,6 +1,6 @@
 """
 
-** update_meetings.py **
+** nbim_meetings_update.py **
 
 Reads all meeting IDs from the `companies` table in the `nbim_data` MySQL
 database, fetches each meeting from the NBIM API, and writes the data to
@@ -8,59 +8,37 @@ the `meetings` and `votes` tables.
 
 Only adds meetings that do not already exist in the database.
 
-Operations are logged to update_meetings.log.
+Operations are logged to nbim_meetings_update.log.
+
+Reads database credentials from client/secrets.txt:
+    DB_USER=<username>
+    DB_SECRET=<password>
 
 Optional arguments:
     --limit N               Stop after fetching N meetings.
-    --log OFF|STRICT|FULL   File logging level (default: FULL).
+    --log OFF|STRICT|FULL   File logging level (default: STRICT).
                             OFF    = no logging to file.
                             STRICT = only start, end, and error messages.
-                            FULL   = all messages (default).
+                            FULL   = all messages.
 
 """
 
 import argparse
-import logging
 import sys
 from datetime import datetime
 
 from mysql.connector import Error as MySQLError
 
 from client.nbimvr_client import NBIMVRClient
-from nbim_functions_db import connect_db, ensure_table, meeting_exists, insert_meeting
+from nbim_functions_db import connect_db, ensure_table, meeting_exists, insert_meeting, get_all_meeting_ids
+from nbim_functions_shared import setup_logging, configure_file_logging, log_important
 
 
 # ──────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────
 
-log = logging.getLogger("update_meetings")
-log.setLevel(logging.DEBUG)
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(formatter)
-log.addHandler(console_handler)
-
-file_handler = logging.FileHandler("update_meetings.log", encoding="utf-8")
-file_handler.setFormatter(formatter)
-
-
-def configure_file_logging(level: str) -> None:
-    if level == "OFF":
-        return
-    if level == "STRICT":
-        file_handler.setLevel(logging.ERROR)
-    else:
-        file_handler.setLevel(logging.DEBUG)
-    log.addHandler(file_handler)
-
-
-def log_important(msg: str) -> None:
-    log.info(msg)
-    if file_handler in log.handlers and file_handler.level > logging.INFO:
-        record = log.makeRecord(log.name, logging.INFO, "", 0, msg, (), None)
-        file_handler.emit(record)
+log = setup_logging("nbim_meetings_update", "nbim_meetings_update.log")
 
 
 # ──────────────────────────────────────────────
@@ -102,33 +80,6 @@ CREATE TABLE IF NOT EXISTS votes (
 
 
 # ──────────────────────────────────────────────
-# Database helpers local to this script
-# ──────────────────────────────────────────────
-
-_GET_ALL_MEETINGS_SQL = "SELECT meetings FROM companies WHERE meetings IS NOT NULL AND meetings != '';"
-
-
-def get_all_meeting_ids(conn) -> list[int]:
-    cur = conn.cursor()
-    cur.execute(_GET_ALL_MEETINGS_SQL)
-    rows = cur.fetchall()
-    cur.close()
-    meeting_ids = []
-    for (meetings_str,) in rows:
-        for mid in meetings_str.split(","):
-            mid = mid.strip()
-            if mid.isdigit():
-                meeting_ids.append(int(mid))
-    seen = set()
-    unique_ids = []
-    for mid in meeting_ids:
-        if mid not in seen:
-            seen.add(mid)
-            unique_ids.append(mid)
-    return unique_ids
-
-
-# ──────────────────────────────────────────────
 # Argument parsing
 # ──────────────────────────────────────────────
 
@@ -136,8 +87,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Populate the meetings and votes tables from the NBIM API.")
     p.add_argument("--limit", type=int, default=None, metavar="N",
                    help="Stop after fetching N meetings.")
-    p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="FULL",
-                   help="File logging level: OFF, STRICT (errors only), or FULL (default).")
+    p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="STRICT",
+                   help="File logging level: OFF, STRICT (errors only, default), or FULL.")
     args = p.parse_args()
     if args.limit is not None and args.limit < 1:
         p.error("--limit must be a positive integer.")
@@ -150,15 +101,15 @@ def parse_args() -> argparse.Namespace:
 
 def run() -> None:
     args = parse_args()
-    configure_file_logging(args.log)
+    configure_file_logging(log, args.log)
 
-    start_msg = "=== update_meetings.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    start_msg = "=== nbim_meetings_update.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if args.limit:
         start_msg += " --limit %d" % args.limit
-    if args.log != "FULL":
+    if args.log != "STRICT":
         start_msg += " --log %s" % args.log
     start_msg += " ==="
-    log_important(start_msg)
+    log_important(log, start_msg)
 
     # Connect to database
     try:
@@ -239,7 +190,7 @@ def run() -> None:
             error_count += 1
 
     conn.close()
-    log_important("=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===" % (
+    log_important(log, "=== Finished. %d meeting(s) added, %d skipped, %d error(s). ===" % (
         success_count, skipped_count, error_count))
 
 

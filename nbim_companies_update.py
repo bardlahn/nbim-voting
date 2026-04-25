@@ -1,10 +1,14 @@
 """
 
-** update_companies.py **
+** nbim_companies_update.py **
 
 Fetches all company records from the NBIM Voting Records API via the NBIMVRClient and inserts/updates them into the `companies` table in the `nbim_data` MySQL database.
 
-Operations are logged to update_companies.log.
+Operations are logged to nbim_companies_update.log.
+
+Reads database credentials from client/secrets.txt:
+    DB_USER=<username>
+    DB_SECRET=<password>
 
 Optional arguments:
     --letter A          Only process companies whose name starts with this letter (case-insensitive).
@@ -14,15 +18,14 @@ Optional arguments:
                         and processes from that list. On subsequent runs, continues from the remaining
                         unprocessed names in NAME.tmp. Deletes NAME.tmp when all names are processed.
     --log OFF|STRICT|FULL
-                        File logging level (default: FULL).
+                        File logging level (default: STRICT).
                         OFF    = no logging to file.
                         STRICT = only start, end, and error messages.
-                        FULL   = all messages (default).
+                        FULL   = all messages.
 
 """
 
 import argparse
-import logging
 import os
 import sys
 from datetime import datetime
@@ -31,39 +34,14 @@ from mysql.connector import Error as MySQLError
 
 from client.nbimvr_client import NBIMVRClient
 from nbim_functions_db import connect_db, ensure_table, company_exists, upsert_company
+from nbim_functions_shared import setup_logging, configure_file_logging, log_important
 
 
 # ──────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────
 
-log = logging.getLogger("update_companies")
-log.setLevel(logging.DEBUG)
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(formatter)
-log.addHandler(console_handler)
-
-file_handler = logging.FileHandler("update_companies.log", encoding="utf-8")
-file_handler.setFormatter(formatter)
-
-
-def configure_file_logging(level: str) -> None:
-    if level == "OFF":
-        return
-    if level == "STRICT":
-        file_handler.setLevel(logging.ERROR)
-    else:
-        file_handler.setLevel(logging.DEBUG)
-    log.addHandler(file_handler)
-
-
-def log_important(msg: str) -> None:
-    log.info(msg)
-    if file_handler in log.handlers and file_handler.level > logging.INFO:
-        record = log.makeRecord(log.name, logging.INFO, "", 0, msg, (), None)
-        file_handler.emit(record)
+log = setup_logging("nbim_companies_update", "nbim_companies_update.log")
 
 
 # ──────────────────────────────────────────────
@@ -116,12 +94,12 @@ def parse_args() -> argparse.Namespace:
                    help="Stop after N API requests (skipped companies do not count).")
     p.add_argument("--staged", default=None, metavar="NAME",
                    help="Staged run: persist progress to NAME.tmp and continue across runs.")
-    p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="FULL",
-                   help="File logging level: OFF, STRICT (errors only), or FULL (default).")
+    p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="STRICT",
+                   help="File logging level: OFF, STRICT (errors only, default), or FULL.")
     args = p.parse_args()
     if args.letter is not None:
         if len(args.letter) != 1 or not args.letter.isalpha():
-            p.error("--letter must be a single letter, e.g.: python update_companies.py --letter M")
+            p.error("--letter must be a single letter, e.g.: python nbim_companies_update.py --letter M")
     if args.limit is not None and args.limit < 1:
         p.error("--limit must be a positive integer.")
     if args.staged is not None and not args.staged.isalnum():
@@ -135,10 +113,10 @@ def parse_args() -> argparse.Namespace:
 
 def run() -> None:
     args = parse_args()
-    configure_file_logging(args.log)
+    configure_file_logging(log, args.log)
     letter = args.letter.upper() if args.letter else None
 
-    start_msg = "=== update_companies.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    start_msg = "=== nbim_companies_update.py started at %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if letter:
         start_msg += " --letter %s" % letter
     if args.add:
@@ -147,10 +125,10 @@ def run() -> None:
         start_msg += " --limit %d" % args.limit
     if args.staged:
         start_msg += " --staged %s" % args.staged
-    if args.log != "FULL":
+    if args.log != "STRICT":
         start_msg += " --log %s" % args.log
     start_msg += " ==="
-    log_important(start_msg)
+    log_important(log, start_msg)
 
     # Connect to database
     try:
@@ -175,7 +153,7 @@ def run() -> None:
 
     if staged_path and os.path.exists(staged_path):
         company_names = read_staged_file(staged_path)
-        log_important("Staged run '%s': resuming with %d remaining name(s) from %s." % (
+        log_important(log, "Staged run '%s': resuming with %d remaining name(s) from %s." % (
             args.staged, len(company_names), staged_path))
     else:
         try:
@@ -192,7 +170,7 @@ def run() -> None:
 
         if staged_path:
             write_staged_file(staged_path, company_names)
-            log_important("Staged run '%s': wrote %d name(s) to %s." % (
+            log_important(log, "Staged run '%s': wrote %d name(s) to %s." % (
                 args.staged, len(company_names), staged_path))
 
     # Process each company
@@ -307,10 +285,10 @@ def run() -> None:
     # Clean up staged file if all names have been processed
     if staged_path and os.path.exists(staged_path) and not remaining_names:
         os.remove(staged_path)
-        log_important("Staged run '%s': all names processed, %s deleted." % (args.staged, staged_path))
+        log_important(log, "Staged run '%s': all names processed, %s deleted." % (args.staged, staged_path))
 
     conn.close()
-    log_important("=== Finished. %d updated, %d skipped, %d error(s). ===" % (
+    log_important(log, "=== Finished. %d updated, %d skipped, %d error(s). ===" % (
         success_count, skipped_count, error_count))
 
 
