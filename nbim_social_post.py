@@ -202,7 +202,7 @@ def run() -> None:
             print(post)
             print("─" * 60)
         else:
-            post_bluesky(post, meeting["id]"])
+            post_bluesky(post, meeting["id"])
             log.info("Posted to Bluesky for meeting id=%s.", meeting["id"])
 
         post_count += 1
