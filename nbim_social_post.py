@@ -77,7 +77,7 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
 def format_post(meeting: dict, votes: list[dict]) -> dict:
     intro = "NBIM voted against management of %s in " % meeting["company_name"]
     link = meeting["type"] + " meeting"
-    outro = "(" + meeting["date"] + ")."
+    outro = "(%s)." % meeting["date"]
     lines = []
     for i, vote in enumerate(votes, start=1):
         lines.append("- Voted '%s' on %s proposal: '%s'" % (
