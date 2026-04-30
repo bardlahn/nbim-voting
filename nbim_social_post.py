@@ -11,6 +11,8 @@ Posts are currently printed to the terminal. Posting mechanics will be added lat
 Operations are logged to nbim_social_post.log.
 
 Optional arguments:
+    --date DATE             Override today's date for checking meetings (format: YYYY-MM-DD).
+    --dry-run               Print posts to terminal only; do not invoke posting function.
     --log OFF|STRICT|FULL   File logging level (default: STRICT).
 
 """
@@ -23,7 +25,7 @@ from mysql.connector import Error as MySQLError
 
 from atproto import Client, client_utils
 
-from nbim_functions_db import connect_db
+from nbim_functions_db import connect_db, _load_secrets
 from nbim_functions_shared import setup_logging, configure_file_logging, log_important
 
 
@@ -52,7 +54,7 @@ AND vote_instruction != management_rec;
 """
 
 
-def get_todays_meetings(conn, today: str) -> list[dict]:
+def get_meetings(conn, today: str) -> list[dict]:
     cur = conn.cursor(dictionary=True)
     cur.execute(_GET_TODAYS_MEETINGS_SQL, {"today": today})
     rows = cur.fetchall()
@@ -73,15 +75,14 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
 # ──────────────────────────────────────────────
 
 def format_post(meeting: dict, votes: list[dict]) -> str:
-    header = "%s meeting in %s held on %s: NBIM deviated from management recommendation." % (
-        meeting["type"],
+    header = "%s: NBIM voted against management in %s meeting (%s)." % (
         meeting["company_name"],
+        meeting["type"],
         meeting["date"],
     )
     lines = [header]
     for i, vote in enumerate(votes, start=1):
-        lines.append("%d. Voted %s on a %s proposal: %s" % (
-            i,
+        lines.append("- Voted '%s' on %s proposal: %s" % (
             vote["vote_instruction"],
             vote["proponent"],
             vote["proposal_text"],
@@ -90,14 +91,47 @@ def format_post(meeting: dict, votes: list[dict]) -> str:
 
 
 # ──────────────────────────────────────────────
-# Argument parsing
+# Social media posting
 # ──────────────────────────────────────────────
 
+def post_bluesky(text: str, meeting: str) -> None:
+
+    # Posting a message to Bluesky
+
+    secrets = _load_secrets()
+    client = Client()
+    client.login(secrets["BSKY_HANDLE"], secrets["BSKY_PASS"]) 
+    text_builder = client_utils.TextBuilder()
+
+    baseurl = "https://www.nbim.no/en/responsible-investment/voting/our-voting-records/meeting?m="
+
+    text_builder.text(text)
+    text_builder.text("(See ")
+    text_builder.link("full meeting details", baseurl + meeting)
+    text_builder.text(")")
+
+    post_text = text_builder.build_text()
+    post_facets = text_builder.build_facets()
+    client.send_post(text=post_text, facets=post_facets)
+
+    pass
+
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Prepare social media posts for today's NBIM voting deviations.")
+    p = argparse.ArgumentParser(description="Prepare social media posts for NBIM voting deviations.")
+    p.add_argument("--date", default=None, metavar="DATE",
+                   help="Override today's date for checking meetings (format: YYYY-MM-DD).")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print posts to terminal only; do not invoke posting function.")
     p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="STRICT",
                    help="File logging level: OFF, STRICT (errors only, default), or FULL.")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.date is not None:
+        try:
+            date.fromisoformat(args.date)
+        except ValueError:
+            p.error("--date must be in YYYY-MM-DD format.")
+    return args
 
 
 # ──────────────────────────────────────────────
@@ -108,10 +142,12 @@ def run() -> None:
     args = parse_args()
     configure_file_logging(log, args.log)
 
-    today = date.today().strftime("%Y-%m-%d")
+    today = args.date if args.date else date.today().strftime("%Y-%m-%d")
 
     start_msg = "=== nbim_social_post.py started at %s (checking date: %s)" % (
-        today, today)
+        date.today().strftime("%Y-%m-%d %H:%M:%S"), today)
+    if args.dry_run:
+        start_msg += " --dry-run"
     if args.log != "STRICT":
         start_msg += " --log %s" % args.log
     start_msg += " ==="
@@ -127,15 +163,15 @@ def run() -> None:
 
     # Fetch today's meetings
     try:
-        meetings = get_todays_meetings(conn, today)
+        meetings = get_meetings(conn, today)
         log.info("Found %d meeting(s) with date %s.", len(meetings), today)
     except MySQLError as exc:
-        log.error("Failed to fetch today's meetings: %s — aborting.", exc)
+        log.error("Failed to fetch meetings: %s — aborting.", exc)
         conn.close()
         sys.exit(1)
 
     if not meetings:
-        log_important(log, "=== No meetings found for today (%s). ===" % today)
+        log_important(log, "=== No meetings found for date %s. ===" % today)
         conn.close()
         return
 
@@ -161,10 +197,13 @@ def run() -> None:
         log.info("Post prepared for meeting id=%s (%s) with %d deviating vote(s).",
                  meeting["id"], meeting["company_name"], len(deviating_votes))
 
-        # Print post to terminal (posting mechanics to be added later)
-        print("\n" + "─" * 60)
-        print(post)
-        print("─" * 60)
+        if args.dry_run:
+            print("\n" + "─" * 60)
+            print(post)
+            print("─" * 60)
+        else:
+            post_bluesky(post, meeting["id]"])
+            log.info("Posted to Bluesky for meeting id=%s.", meeting["id"])
 
         post_count += 1
 
