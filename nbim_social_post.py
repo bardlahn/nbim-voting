@@ -74,27 +74,26 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
 # Post formatting
 # ──────────────────────────────────────────────
 
-def format_post(meeting: dict, votes: list[dict]) -> str:
-    header = "%s: NBIM voted against management in %s meeting (%s)." % (
-        meeting["company_name"],
-        meeting["type"],
-        meeting["date"],
-    )
-    lines = [header]
+def format_post(meeting: dict, votes: list[dict]) -> dict:
+    intro = "NBIM voted against management of %s in %s meeting (%s)." % meeting["company_name"]
+    link = meeting["type"] + " meeting"
+    outro = "(" + meeting["date"] + ")."
+    lines = []
     for i, vote in enumerate(votes, start=1):
-        lines.append("- Voted '%s' on %s proposal: %s" % (
+        lines.append("- Voted '%s' on %s proposal: '%s'" % (
             vote["vote_instruction"],
             vote["proponent"],
             vote["proposal_text"],
         ))
-    return "\n".join(lines)
+    d = {"intro": intro, "link": link, "ountro": outro, "lines": "\n".join(lines)}
+    return d
 
 
 # ──────────────────────────────────────────────
 # Social media posting
 # ──────────────────────────────────────────────
 
-def post_bluesky(text: str, meeting: int) -> None:
+def post_bluesky(post: dict, meeting: int) -> None:
 
     # Posting a message to Bluesky
 
@@ -105,10 +104,10 @@ def post_bluesky(text: str, meeting: int) -> None:
 
     baseurl = "https://www.nbim.no/en/responsible-investment/voting/our-voting-records/meeting?m="
 
-    text_builder.text(text)
-    text_builder.text("(See ")
-    text_builder.link("full meeting details", baseurl + str(meeting))
-    text_builder.text(")")
+    text_builder.text(post["intro"])
+    text_builder.link(post["link"], baseurl + str(meeting))
+    text_builder.text(post["outro"] + "\n")
+    text_builder.text(post["lines"])
 
     post_text = text_builder.build_text()
     post_facets = text_builder.build_facets()
@@ -199,7 +198,7 @@ def run() -> None:
 
         if args.dry_run:
             print("\n" + "─" * 60)
-            print(post)
+            print(post["intro"] + post["link"] + post["outro"] + "\n" + post["lines"])
             print("─" * 60)
         else:
             post_bluesky(post, meeting["id"])
