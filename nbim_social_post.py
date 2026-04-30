@@ -85,7 +85,7 @@ def format_post(meeting: dict, votes: list[dict]) -> dict:
             vote["proponent"],
             vote["proposal_text"],
         ))
-    d = {"intro": intro, "link": link, "ountro": outro, "lines": "\n".join(lines)}
+    d = {"intro": intro, "link": link, "outro": outro, "lines": "\n".join(lines)}
     return d
 
 
