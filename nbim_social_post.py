@@ -94,7 +94,7 @@ def format_post(meeting: dict, votes: list[dict]) -> str:
 # Social media posting
 # ──────────────────────────────────────────────
 
-def post_bluesky(text: str, meeting: str) -> None:
+def post_bluesky(text: str, meeting: int) -> None:
 
     # Posting a message to Bluesky
 
@@ -107,7 +107,7 @@ def post_bluesky(text: str, meeting: str) -> None:
 
     text_builder.text(text)
     text_builder.text("(See ")
-    text_builder.link("full meeting details", baseurl + meeting)
+    text_builder.link("full meeting details", baseurl + str(meeting))
     text_builder.text(")")
 
     post_text = text_builder.build_text()
