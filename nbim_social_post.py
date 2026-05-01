@@ -228,7 +228,7 @@ def run() -> None:
 
         if args.dry_run:
             print("\n" + "─" * 60)
-            print(post["intro"] + post["link"] + post["outro"] + "\n" + post["lines"])
+            print(post)
             print("─" * 60)
         else:
             post_bluesky(post, meeting["id"])

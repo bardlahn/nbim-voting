@@ -75,19 +75,11 @@ DUMMY_VOTES = [
 def run() -> None:
     post = format_post(DUMMY_MEETING, DUMMY_VOTES)
 
-    full_text = post["intro"] + post["link"] + post["outro"] + "\n" + post["lines"]
-
     print("=" * 60)
-    print("FORMATTED POST (%d chars):" % len(full_text))
+    print("FORMATTED POST (%d chars):" % len(post))
     print("=" * 60)
-    print(full_text)
+    print(post)
     print("=" * 60)
-    print("\nBreakdown:")
-    print("  intro : %d chars — %r" % (len(post["intro"]), post["intro"]))
-    print("  link  : %d chars — %r" % (len(post["link"]), post["link"]))
-    print("  outro : %d chars — %r" % (len(post["outro"]), post["outro"]))
-    print("  lines : %d chars — %r" % (len(post["lines"]), post["lines"]))
-    print("\nTotal : %d chars" % len(full_text))
 
 
 if __name__ == "__main__":
