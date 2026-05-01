@@ -74,11 +74,12 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
 # Post formatting
 # ──────────────────────────────────────────────
 
-def format_post(meeting: dict, votes: list[dict]) -> dict:
+def format_post(meeting: dict, votes: list[dict]) -> str:
     
-    intro = "NBIM voted against management of %s in " % meeting["company_name"]
-    link = meeting["type"] + " meeting"
-    outro = " (%s):" % meeting["date"]
+    meetname = meeting["type"]
+    if not meetname.lower().endswith("meeting"):
+        meetname += " meeting"
+    intro = "%s %s (%s) - NBIM voted against management: " % (meeting["company_name"], meetname, meeting["date"])
     lines = []
     
     for i, vote in enumerate(votes, start=1):
@@ -88,11 +89,7 @@ def format_post(meeting: dict, votes: list[dict]) -> dict:
             truncate_string(vote["proposal_text"]),
         ))
     
-    d = {"intro": intro, 
-         "link": link, 
-         "outro": outro, 
-         "lines": combine_lines(intro, link, outro, lines)}   
-    
+    d = intro + combine_lines(intro, lines)
     return d
 
 
@@ -101,22 +98,22 @@ def truncate_string(s: str) -> str:
         return s
     truncate_pos = s.find(' ', 20) 
     if truncate_pos == -1:
-        return s[:20] + '...'
-    return s[:truncate_pos] + '...'
+        return s[:20] + '…'
+    return s[:truncate_pos] + '…'
 
 
-def combine_lines(s1: str, s2: str, s3: str, arr: list[str]) -> str:
-    base_length = len(s1) + len(s2) + len(s3)
+def combine_lines(s1, arr: list[str]) -> str:
+    base_length = len(s1)
     total_length = base_length + sum(len(s) for s in arr)
 
-    if total_length <= 294:
-        return '\n'.join(arr)
+    if total_length <= 260:
+        return '\n'.join(arr) + "\nSee "
 
     combined = ''
     for item in arr:
         addition = item if not combined else '\n' + item
-        if base_length + len(combined) + len(addition) > 265:
-            combined += "\n(See meeting for more...)"
+        if base_length + len(combined) + len(addition) > 245:
+            combined += "\nFor more votes, see "
             break
         combined += addition
 
@@ -127,7 +124,7 @@ def combine_lines(s1: str, s2: str, s3: str, arr: list[str]) -> str:
 # Social media posting
 # ──────────────────────────────────────────────
 
-def post_bluesky(post: dict, meeting: int) -> None:
+def post_bluesky(post: str, meeting: int) -> None:
 
     # Posting a message to Bluesky
 
@@ -138,10 +135,9 @@ def post_bluesky(post: dict, meeting: int) -> None:
 
     baseurl = "https://www.nbim.no/en/responsible-investment/voting/our-voting-records/meeting?m="
 
-    text_builder.text(post["intro"])
-    text_builder.link(post["link"], baseurl + str(meeting))
-    text_builder.text(post["outro"] + "\n")
-    text_builder.text(post["lines"])
+    text_builder.text(post)
+    text_builder.link("full meeting details", baseurl + str(meeting))
+    text_builder.text(".")
 
     post_text = text_builder.build_text()
     post_facets = text_builder.build_facets()
