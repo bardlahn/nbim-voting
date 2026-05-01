@@ -79,11 +79,11 @@ def format_post(meeting: dict, votes: list[dict]) -> str:
     meetname = meeting["type"]
     if not meetname.lower().endswith("meeting"):
         meetname += " meeting"
-    intro = "%s %s (%s) - NBIM voted against management: " % (meeting["company_name"], meetname, meeting["date"])
+    intro = "%s %s (%s) - NBIM voted against management:\n" % (meeting["company_name"], meetname, meeting["date"])
     lines = []
-    
+
     for i, vote in enumerate(votes, start=1):
-        lines.append("-%s %s proposal: %s" % (
+        lines.append("• %s %s proposal: %s" % (
             vote["vote_instruction"],
             vote["proponent"],
             truncate_string(vote["proposal_text"]),
