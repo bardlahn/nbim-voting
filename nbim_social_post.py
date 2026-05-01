@@ -75,18 +75,52 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
 # ──────────────────────────────────────────────
 
 def format_post(meeting: dict, votes: list[dict]) -> dict:
+    
     intro = "NBIM voted against management of %s in " % meeting["company_name"]
     link = meeting["type"] + " meeting"
     outro = " (%s):" % meeting["date"]
     lines = []
+    
     for i, vote in enumerate(votes, start=1):
-        lines.append("- Voted '%s' on %s proposal: '%s'" % (
+        lines.append("-%s %s proposal: %s" % (
             vote["vote_instruction"],
             vote["proponent"],
-            vote["proposal_text"],
+            truncate_string(vote["proposal_text"]),
         ))
-    d = {"intro": intro, "link": link, "outro": outro, "lines": "\n".join(lines)}
+    
+    d = {"intro": intro, 
+         "link": link, 
+         "outro": outro, 
+         "lines": combine_lines(intro, link, outro, lines)}   
+    
     return d
+
+
+def truncate_string(s: str) -> str:
+    if len(s) <= 26:
+        return s
+    truncate_pos = s.find(' ', 20) 
+    if truncate_pos == -1:
+        return s[:20] + '...'
+    return s[:truncate_pos] + '...'
+
+
+def combine_lines(s1: str, s2: str, s3: str, arr: list[str]) -> str:
+    base_length = len(s1) + len(s2) + len(s3)
+    total_length = base_length + sum(len(s) for s in arr)
+
+    if total_length <= 294:
+        return '\n'.join(arr)
+
+    combined = ''
+    for item in arr:
+        addition = item if not combined else '\n' + item
+        if base_length + len(combined) + len(addition) > 265:
+            combined += "\n(See meeting for more...)"
+            break
+        combined += addition
+
+    return combined
 
 
 # ──────────────────────────────────────────────
