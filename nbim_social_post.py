@@ -2,16 +2,25 @@
 
 ** nbim_social_post.py **
 
-Checks the database for meetings held on today's date, identifies any votes
-where NBIM's vote_instruction deviates from management_rec, and prepares a
-short social media post for each such meeting.
+Checks the database for meetings, identifies any votes where NBIM's
+vote_instruction deviates from management_rec, and prepares a short social
+media post for each such meeting.
 
 Posts are currently printed to the terminal. Posting mechanics will be added later.
 
 Operations are logged to nbim_social_post.log.
 
 Optional arguments:
-    --date DATE             Override today's date for checking meetings (format: YYYY-MM-DD).
+    --date DATE                 Override today's date (format: YYYY-MM-DD).
+    --timing NEAR|EXACT|UPDATED How to apply the date when selecting meetings (default: NEAR).
+                                  NEAR    — meetings whose 'date' falls within the 14 days up to
+                                            and including the target date.
+                                  EXACT   — meetings whose 'date' equals the target date exactly.
+                                  UPDATED — meetings whose 'updated' field equals the target date
+                                            exactly (i.e. rows added on that date).
+    --include NEW|ALL           Which meetings to process (default: NEW).
+                                  NEW — skip meetings where 'posted' is already set.
+                                  ALL — process all matched meetings regardless of 'posted'.
     --dry-run               Print posts to terminal only; do not invoke posting function.
     --log OFF|STRICT|FULL   File logging level (default: STRICT).
 
@@ -19,7 +28,7 @@ Optional arguments:
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 from mysql.connector import Error as MySQLError
 
@@ -40,10 +49,22 @@ log = setup_logging("nbim_social_post", "nbim_social_post.log")
 # Database queries
 # ──────────────────────────────────────────────
 
-_GET_TODAYS_MEETINGS_SQL = """
-SELECT id, type, date, company_name
+_GET_MEETINGS_NEAR_SQL = """
+SELECT id, type, date, company_name, posted
 FROM meetings
-WHERE date = %(today)s;
+WHERE date BETWEEN %(from_date)s AND %(to_date)s;
+"""
+
+_GET_MEETINGS_EXACT_SQL = """
+SELECT id, type, date, company_name, posted
+FROM meetings
+WHERE date = %(target_date)s;
+"""
+
+_GET_MEETINGS_UPDATED_SQL = """
+SELECT id, type, date, company_name, posted
+FROM meetings
+WHERE DATE(updated) = %(target_date)s;
 """
 
 _GET_DEVIATING_VOTES_SQL = """
@@ -53,10 +74,22 @@ WHERE meeting_id = %(meeting_id)s
 AND vote_instruction != management_rec;
 """
 
+_SET_MEETING_POSTED_SQL = """
+UPDATE meetings
+SET posted = %(posted_date)s
+WHERE id = %(meeting_id)s;
+"""
 
-def get_meetings(conn, today: str) -> list[dict]:
+
+def get_meetings(conn, target_date: str, timing: str) -> list[dict]:
     cur = conn.cursor(dictionary=True)
-    cur.execute(_GET_TODAYS_MEETINGS_SQL, {"today": today})
+    if timing == "NEAR":
+        from_date = (date.fromisoformat(target_date) - timedelta(days=13)).strftime("%Y-%m-%d")
+        cur.execute(_GET_MEETINGS_NEAR_SQL, {"from_date": from_date, "to_date": target_date})
+    elif timing == "EXACT":
+        cur.execute(_GET_MEETINGS_EXACT_SQL, {"target_date": target_date})
+    else:  # UPDATED
+        cur.execute(_GET_MEETINGS_UPDATED_SQL, {"target_date": target_date})
     rows = cur.fetchall()
     cur.close()
     return rows
@@ -68,6 +101,13 @@ def get_deviating_votes(conn, meeting_id: int) -> list[dict]:
     rows = cur.fetchall()
     cur.close()
     return rows
+
+
+def set_meeting_posted(conn, meeting_id: int, posted_date: str) -> None:
+    cur = conn.cursor()
+    cur.execute(_SET_MEETING_POSTED_SQL, {"posted_date": posted_date, "meeting_id": meeting_id})
+    conn.commit()
+    cur.close()
 
 
 # ──────────────────────────────────────────────
@@ -150,6 +190,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Prepare social media posts for NBIM voting deviations.")
     p.add_argument("--date", default=None, metavar="DATE",
                    help="Override today's date for checking meetings (format: YYYY-MM-DD).")
+    p.add_argument("--timing", choices=["NEAR", "EXACT", "UPDATED"], default="NEAR",
+                   help="How to apply the date when selecting meetings: NEAR (14-day window, default), "
+                        "EXACT (exact date match on 'date' field), or UPDATED (exact match on 'updated' field).")
+    p.add_argument("--include", choices=["NEW", "ALL"], default="NEW",
+                   help="Which meetings to process: NEW (skip already-posted, default) or ALL (ignore 'posted' field).")
     p.add_argument("--dry-run", action="store_true",
                    help="Print posts to terminal only; do not invoke posting function.")
     p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="STRICT",
@@ -172,9 +217,10 @@ def run() -> None:
     configure_file_logging(log, args.log)
 
     today = args.date if args.date else date.today().strftime("%Y-%m-%d")
+    execution_date = date.today().strftime("%Y-%m-%d")
 
-    start_msg = "=== nbim_social_post.py started at %s (checking date: %s)" % (
-        date.today().strftime("%Y-%m-%d %H:%M:%S"), today)
+    start_msg = "=== nbim_social_post.py started at %s (target date: %s, --timing %s, --include %s)" % (
+        date.today().strftime("%Y-%m-%d %H:%M:%S"), today, args.timing, args.include)
     if args.dry_run:
         start_msg += " --dry-run"
     if args.log != "STRICT":
@@ -190,17 +236,30 @@ def run() -> None:
         log.error("Could not connect to database: %s — aborting.", exc)
         sys.exit(1)
 
-    # Fetch today's meetings
+    # Fetch meetings according to --timing
     try:
-        meetings = get_meetings(conn, today)
-        log.info("Found %d meeting(s) with date %s.", len(meetings), today)
+        meetings = get_meetings(conn, today, args.timing)
+        log.info("Found %d meeting(s) matching target date %s (--timing %s).", len(meetings), today, args.timing)
     except MySQLError as exc:
         log.error("Failed to fetch meetings: %s — aborting.", exc)
         conn.close()
         sys.exit(1)
 
     if not meetings:
-        log_important(log, "=== No meetings found for date %s. ===" % today)
+        log_important(log, "=== No meetings found for target date %s (--timing %s). ===" % (today, args.timing))
+        conn.close()
+        return
+
+    # Filter out already-posted meetings if --include NEW
+    if args.include == "NEW":
+        unposted = [m for m in meetings if not m["posted"]]
+        skipped = len(meetings) - len(unposted)
+        if skipped:
+            log.info("Skipping %d already-posted meeting(s) (--include NEW).", skipped)
+        meetings = unposted
+
+    if not meetings:
+        log_important(log, "=== All matched meetings already posted. Nothing to process. ===")
         conn.close()
         return
 
@@ -214,6 +273,15 @@ def run() -> None:
             deviating_votes = get_deviating_votes(conn, meeting["id"])
         except MySQLError as exc:
             log.error("ERROR fetching votes for meeting id=%s: %s", meeting["id"], exc)
+            error_count += 1
+            continue
+
+        # Mark meeting as processed regardless of whether it has deviating votes
+        try:
+            set_meeting_posted(conn, meeting["id"], execution_date)
+            log.info("Set posted=%s for meeting id=%s.", execution_date, meeting["id"])
+        except MySQLError as exc:
+            log.error("ERROR setting posted for meeting id=%s: %s", meeting["id"], exc)
             error_count += 1
             continue
 
