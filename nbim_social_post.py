@@ -84,8 +84,9 @@ WHERE id = %(meeting_id)s;
 def get_meetings(conn, target_date: str, timing: str) -> list[dict]:
     cur = conn.cursor(dictionary=True)
     if timing == "NEAR":
-        from_date = (date.fromisoformat(target_date) - timedelta(days=13)).strftime("%Y-%m-%d")
-        cur.execute(_GET_MEETINGS_NEAR_SQL, {"from_date": from_date, "to_date": target_date})
+        from_date = (date.fromisoformat(target_date) - timedelta(days=14)).strftime("%Y-%m-%d")
+        to_date = (date.fromisoformat(target_date) + timedelta(days=14)).strftime("%Y-%m-%d")
+        cur.execute(_GET_MEETINGS_NEAR_SQL, {"from_date": from_date, "to_date": to_date})
     elif timing == "EXACT":
         cur.execute(_GET_MEETINGS_EXACT_SQL, {"target_date": target_date})
     else:  # UPDATED
@@ -277,13 +278,14 @@ def run() -> None:
             continue
 
         # Mark meeting as processed regardless of whether it has deviating votes
-        try:
-            set_meeting_posted(conn, meeting["id"], execution_date)
-            log.info("Set posted=%s for meeting id=%s.", execution_date, meeting["id"])
-        except MySQLError as exc:
-            log.error("ERROR setting posted for meeting id=%s: %s", meeting["id"], exc)
-            error_count += 1
-            continue
+        if not args.dry_run:
+            try:
+                set_meeting_posted(conn, meeting["id"], execution_date)
+                log.info("Set posted=%s for meeting id=%s.", execution_date, meeting["id"])
+            except MySQLError as exc:
+                log.error("ERROR setting posted for meeting id=%s: %s", meeting["id"], exc)
+                error_count += 1
+                continue
 
         if not deviating_votes:
             log.info("No deviating votes for meeting id=%s (%s).", meeting["id"], meeting["company_name"])
