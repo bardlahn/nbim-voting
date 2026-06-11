@@ -2,11 +2,8 @@
 
 ** nbim_social_post.py **
 
-Checks the database for meetings, identifies any votes where NBIM's
-vote_instruction deviates from management_rec, and prepares a short social
-media post for each such meeting.
-
-Posts are currently printed to the terminal. Posting mechanics will be added later.
+Checks the database for meetings, identifies any votes where NBIM's vote_instruction deviates
+from management_rec, and prepares a short social media post for each such meeting.
 
 Operations are logged to nbim_social_post.log.
 
@@ -37,17 +34,10 @@ from atproto import Client, client_utils
 from nbim_functions_db import connect_db, _load_secrets
 from nbim_functions_shared import setup_logging, configure_file_logging, log_important
 
-
-# ──────────────────────────────────────────────
-# Logging
-# ──────────────────────────────────────────────
-
 log = setup_logging("nbim_social_post", "nbim_social_post.log")
 
 
-# ──────────────────────────────────────────────
-# Database queries
-# ──────────────────────────────────────────────
+# Defining database queries
 
 _GET_MEETINGS_NEAR_SQL = """
 SELECT id, type, date, company_name, posted
@@ -81,6 +71,8 @@ WHERE id = %(meeting_id)s;
 """
 
 
+# Database functions
+
 def get_meetings(conn, target_date: str, timing: str) -> list[dict]:
     cur = conn.cursor(dictionary=True)
     if timing == "NEAR":
@@ -111,9 +103,7 @@ def set_meeting_posted(conn, meeting_id: int, posted_date: str) -> None:
     cur.close()
 
 
-# ──────────────────────────────────────────────
 # Post formatting
-# ──────────────────────────────────────────────
 
 def format_post(meeting: dict, votes: list[dict]) -> str:
     
@@ -161,13 +151,9 @@ def combine_lines(s1, arr: list[str]) -> str:
     return combined
 
 
-# ──────────────────────────────────────────────
-# Social media posting
-# ──────────────────────────────────────────────
+# Bluesky posting
 
 def post_bluesky(post: str, meeting: int) -> None:
-
-    # Posting a message to Bluesky
 
     secrets = _load_secrets()
     client = Client()
@@ -187,6 +173,8 @@ def post_bluesky(post: str, meeting: int) -> None:
     pass
 
 
+# Argument parsing
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Prepare social media posts for NBIM voting deviations.")
     p.add_argument("--date", default=None, metavar="DATE",
@@ -200,6 +188,8 @@ def parse_args() -> argparse.Namespace:
                    help="Print posts to terminal only; do not invoke posting function.")
     p.add_argument("--log", choices=["OFF", "STRICT", "FULL"], default="STRICT",
                    help="File logging level: OFF, STRICT (errors only, default), or FULL.")
+    p.add_argument("--limit", type=int, default=None, metavar="N",
+               help="Maximum number of posts to publish to Bluesky in one run. Oldest meetings are posted first.")
     args = p.parse_args()
     if args.date is not None:
         try:
@@ -209,9 +199,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-# ──────────────────────────────────────────────
-# Main
-# ──────────────────────────────────────────────
+# Main logic
 
 def run() -> None:
     args = parse_args()
@@ -263,6 +251,9 @@ def run() -> None:
         log_important(log, "=== All matched meetings already posted. Nothing to process. ===")
         conn.close()
         return
+    
+    # Sorting meetings to process the oldest first
+    meetings.sort(key=lambda m: m["date"])
 
     # Process each meeting
     post_count = 0
@@ -277,7 +268,30 @@ def run() -> None:
             error_count += 1
             continue
 
-        # Mark meeting as processed regardless of whether it has deviating votes
+        # If no deviating votes found, moving on without posting
+        if not deviating_votes:
+            log.info("No deviating votes for meeting id=%s (%s).", meeting["id"], meeting["company_name"])
+            no_deviation_count += 1
+            if not args.dry_run:
+                try:
+                    set_meeting_posted(conn, meeting["id"], execution_date)
+                    log.info("Set posted=%s for meeting id=%s.", execution_date, meeting["id"])
+                except MySQLError as exc:
+                    log.error("ERROR setting posted for meeting id=%s: %s", meeting["id"], exc)
+                    error_count += 1
+            continue
+
+        # If deviating votes are found, checking if post limit is reached
+        if args.limit is not None and post_count >= args.limit:
+            log.info("Post limit of %d reached; skipping meeting id=%s.", args.limit, meeting["id"])
+            continue
+
+        # If post limit is not reached, proceeding to preparing post
+        post = format_post(meeting, deviating_votes)
+        log.info("Post prepared for meeting id=%s (%s) with %d deviating vote(s).",
+                 meeting["id"], meeting["company_name"], len(deviating_votes))
+
+        # If not in dry-run mode, posting the prepared post
         if not args.dry_run:
             try:
                 set_meeting_posted(conn, meeting["id"], execution_date)
@@ -286,26 +300,17 @@ def run() -> None:
                 log.error("ERROR setting posted for meeting id=%s: %s", meeting["id"], exc)
                 error_count += 1
                 continue
-
-        if not deviating_votes:
-            log.info("No deviating votes for meeting id=%s (%s).", meeting["id"], meeting["company_name"])
-            no_deviation_count += 1
-            continue
-
-        post = format_post(meeting, deviating_votes)
-        log.info("Post prepared for meeting id=%s (%s) with %d deviating vote(s).",
-                 meeting["id"], meeting["company_name"], len(deviating_votes))
-
-        if args.dry_run:
+            post_bluesky(post, meeting["id"])
+            log.info("Posted to Bluesky for meeting id=%s.", meeting["id"])
+        else:
             print("\n" + "─" * 60)
             print(post)
             print("─" * 60)
-        else:
-            post_bluesky(post, meeting["id"])
-            log.info("Posted to Bluesky for meeting id=%s.", meeting["id"])
 
         post_count += 1
 
+
+    # Finishing up
     conn.close()
     log_important(log, "=== Finished. %d post(s) prepared, %d meeting(s) with no deviations, %d error(s). ===" % (
         post_count, no_deviation_count, error_count))
