@@ -76,7 +76,7 @@ WHERE id = %(meeting_id)s;
 def get_meetings(conn, target_date: str, timing: str) -> list[dict]:
     cur = conn.cursor(dictionary=True)
     if timing == "NEAR":
-        from_date = (date.fromisoformat(target_date) - timedelta(days=14)).strftime("%Y-%m-%d")
+        from_date = (date.fromisoformat(target_date) - timedelta(days=7)).strftime("%Y-%m-%d")
         to_date = (date.fromisoformat(target_date) + timedelta(days=14)).strftime("%Y-%m-%d")
         cur.execute(_GET_MEETINGS_NEAR_SQL, {"from_date": from_date, "to_date": to_date})
     elif timing == "EXACT":
